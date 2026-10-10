@@ -231,6 +231,24 @@ alembic upgrade head && uvicorn server:app --host 0.0.0.0 --port 8080
 
 如果迁移失败(罕见),容器会退出、数据库保留在升级前的版本上 — 修复问题后 `docker compose pull && up -d` 重试即可。
 
+### PostgreSQL
+
+默认使用 SQLite;项目也支持 PostgreSQL 16。本地可先启动 PG:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d db
+```
+
+然后让后端使用同一套 Alembic schema:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://beecount:beecount@localhost:5432/beecount
+make migrate
+make dev-api
+```
+
+PG 备份由服务端自动改用 `pg_dump --format=custom`;SQLite 仍使用 `VACUUM INTO`。恢复 PG dump 时使用 `pg_restore`。
+
 ---
 
 ## 📱 移动端 App 接入

@@ -23,6 +23,8 @@ def run_migrations_offline() -> None:
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
+        compare_type=True,
+        compare_server_default=True,
         dialect_opts={"paramstyle": "named"},
     )
 
@@ -38,7 +40,16 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+            # SQLite has limited ALTER TABLE support; batch mode recreates the
+            # table using Alembic's supported workflow.
+            render_as_batch=connection.dialect.name == "sqlite",
+            transaction_per_migration=True,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

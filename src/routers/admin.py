@@ -8,7 +8,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -20,7 +20,6 @@ from ..ledger_access import (
 )
 from ..logging_ring import get_ring_buffer
 from ..models import (
-    AttachmentFile,
     AuditLog,
     BackupArtifact,
     BackupSnapshot,
@@ -582,7 +581,7 @@ def health(
     db: Session = Depends(get_db),
 ) -> dict:
     _ = current_user.id
-    db.execute(text("SELECT 1"))
+    db.execute(select(literal(1)))
     ws_manager = request.app.state.ws_manager
     return {
         "status": "ok",

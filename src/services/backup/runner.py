@@ -1,7 +1,7 @@
 """单次备份运行的编排。流程:
 
 1. 在 BackupRun 表里新建 run row(status='running')
-2. VACUUM INTO → staging/<run_id>/db.sqlite3
+2. SQLite VACUUM INTO / PostgreSQL pg_dump → staging/<run_id>/db.dump
 3. hardlink attachments → staging/<run_id>/attachments
 4. cp .jwt_secret(可选)
 5. 写 meta.json
@@ -20,9 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
-import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +38,7 @@ from ...models import (
     BackupScheduleRemote,
 )
 from ...version import __version__ as APP_VERSION
-from .db_snapshot import vacuum_into
+from .db_snapshot import create_database_snapshot
 from .rclone_config import (
     RcloneConfigManager,
     get_age_passphrase,
@@ -53,7 +51,6 @@ from .retention import (
     filter_backup_files,
 )
 from .tar_builder import build_encrypted_zip, build_targz, hardlink_tree
-
 
 logger = logging.getLogger(__name__)
 
@@ -258,14 +255,14 @@ def _run_with_remotes(
     encrypted_zips_to_cleanup: list[Path] = []
 
     try:
-        # ---- 1. SQLite VACUUM INTO ----
+        # ---- 1. Consistent database snapshot ----
         _push({"type": "backup_progress", "phase": "snapshot_db"})
-        log_fn("VACUUM INTO ...")
-        # 用现成 db session 跑 VACUUM 会破坏后续提交;另开一个独立 session
-        # 跑这一条命令。
+        log_fn("create database snapshot ...")
+        # Snapshot in a dedicated session; backup bookkeeping continues in db.
         snap_db = SessionLocal()
         try:
-            vacuum_into(snap_db, work_dir / "db.sqlite3")
+            dump_path = create_database_snapshot(snap_db, work_dir / "db.dump")
+            log_fn(f"database snapshot written to {dump_path.name}")
         finally:
             snap_db.close()
 
@@ -297,7 +294,7 @@ def _run_with_remotes(
 
         # ---- 4. meta.json ----
         meta = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "appVersion": APP_VERSION,
             "createdAt": _now().isoformat(),
             "scheduleId": schedule.id if schedule else None,

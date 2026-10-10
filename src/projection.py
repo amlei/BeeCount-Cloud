@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -111,47 +111,50 @@ def _parse_happened_at(raw: Any):
 
 
 # --------------------------------------------------------------------------- #
-# Dialect 中立的 upsert                                                         #
+# Dialect-aware upsert                                                          #
 # --------------------------------------------------------------------------- #
-# SQLite / PostgreSQL 都用 INSERT ... ON CONFLICT DO UPDATE。SQLAlchemy 的
-# `dialects.sqlite.insert` 在两种库上语法基本一致;`dialects.postgresql.insert`
-# 同理。我们按 bind 方言走对应 insert,fallback 到先 SELECT 再 UPDATE/INSERT。
+# SQLAlchemy's portable insert() does not expose ON CONFLICT. SQLite and
+# PostgreSQL each provide a dialect-specific insert construct; select one from
+# the connection dialect instead of compiling one dialect's construct for the
+# other database.
 
-def _is_sqlite(bind) -> bool:
-    try:
-        name = bind.dialect.name if hasattr(bind, "dialect") else bind.bind.dialect.name
-    except AttributeError:
-        return True
-    return name == "sqlite"
+def _dialect_insert(dialect_name: str):
+    """Return SQLAlchemy's ON CONFLICT constructor for a supported dialect."""
+    if dialect_name == "sqlite":
+        return sqlite_insert
+    if dialect_name == "postgresql":
+        return postgresql_insert
+    return None
 
 
 def _upsert(db: Session, model, pk_fields: tuple[str, ...], values: dict) -> None:
     """通用 upsert:主键撞了就 UPDATE 其他所有列。"""
-    bind = db.get_bind()
-    if _is_sqlite(bind) or getattr(bind.dialect, "name", "") == "postgresql":
-        # SQLite / PG 都支持 ON CONFLICT。这里用 sqlite 方言 insert 生成语句,
-        # 实际执行时由 SQLAlchemy 翻译;PG 下走一样的语义。
-        stmt = sqlite_insert(model).values(**values)
-        update_cols = {k: stmt.excluded[k] for k in values.keys() if k not in pk_fields}
-        if update_cols:
-            stmt = stmt.on_conflict_do_update(
-                index_elements=list(pk_fields), set_=update_cols
-            )
+    insert_cls = _dialect_insert(db.get_bind().dialect.name)
+    if insert_cls is None:
+        # 兜底:未知方言用 merge 风格(select → insert or update)。
+        filters = [getattr(model, key) == values[key] for key in pk_fields]
+        existing = db.scalar(select(model).where(*filters))
+        if existing is None:
+            db.add(model(**values))
         else:
-            # 没有非主键列要改(理论不会发生),退化成 DO NOTHING
-            stmt = stmt.on_conflict_do_nothing(index_elements=list(pk_fields))
-        db.execute(stmt)
+            for key, value in values.items():
+                if key not in pk_fields:
+                    setattr(existing, key, value)
         return
 
-    # 兜底:未知方言用 merge 风格(select → insert or update)
-    filters = [getattr(model, k) == values[k] for k in pk_fields]
-    existing = db.scalar(select(model).where(*filters))
-    if existing is None:
-        db.add(model(**values))
+    stmt = insert_cls(model).values(**values)
+    update_cols = {
+        key: stmt.excluded[key]
+        for key in values
+        if key not in pk_fields
+    }
+    if update_cols:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(pk_fields), set_=update_cols
+        )
     else:
-        for k, v in values.items():
-            if k not in pk_fields:
-                setattr(existing, k, v)
+        stmt = stmt.on_conflict_do_nothing(index_elements=list(pk_fields))
+    db.execute(stmt)
 
 
 # --------------------------------------------------------------------------- #
@@ -737,8 +740,6 @@ def rebuild_all(db: Session) -> int:
     """遍历所有 ledger,按各自 latest snapshot 重建 projection。
     返回处理的 ledger 个数。救急脚本 `scripts/rebuild_all_projections.py` 用。
     """
-    from sqlalchemy import func
-
     from .models import Ledger, SyncChange
 
     count = 0

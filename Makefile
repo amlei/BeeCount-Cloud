@@ -1,4 +1,4 @@
-.PHONY: setup-backend migrate dev-up dev-api dev-web dev-db seed-demo grant-admin cleanup-diag-users test lint typecheck wipe-local
+.PHONY: setup-backend migrate dev-up dev-api dev-web dev-db seed-demo grant-admin cleanup-diag-users test test-pg lint typecheck wipe-local
 
 setup-backend:
 	python3 -m venv .venv
@@ -44,6 +44,15 @@ cleanup-diag-users:
 	. .venv/bin/activate && PYTHONPATH=. python scripts/cleanup_diag_users.py $(if $(APPLY),--apply,)
 
 test:
+	. .venv/bin/activate && pytest -q
+
+# Run with a migrated PostgreSQL database, for example:
+#   DATABASE_URL=postgresql+psycopg://beecount:beecount@localhost:5432/beecount_test make test-pg
+test-pg:
+	@if [ -z "$$DATABASE_URL" ]; then \
+		echo "DATABASE_URL is required (postgresql+psycopg://...)"; \
+		exit 1; \
+	fi
 	. .venv/bin/activate && pytest -q
 
 lint:

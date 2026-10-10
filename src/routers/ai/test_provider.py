@@ -115,7 +115,7 @@ def _classify_error(status_code: int, body: str) -> str:
 
 
 @router.post("/test-provider", response_model=TestProviderResponse)
-async def test_provider(
+async def run_provider_test(
     req: TestProviderRequest,
     current_user: User = Depends(get_current_user),
 ) -> TestProviderResponse:

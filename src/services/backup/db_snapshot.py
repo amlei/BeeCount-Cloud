@@ -1,25 +1,89 @@
-"""SQLite 快照 —— 用 `VACUUM INTO` 拿一致的单文件输出。
+"""Dialect-aware consistent database snapshots.
 
-WAL 模式下直接 `cp beecount.db` 不安全:
-  - WAL 段还没 checkpoint,目标文件少事务
-  - 备份过程中读到的内容半截
-
-`VACUUM INTO 'path'` 是原子的 + 已 checkpoint + 输出永远是单文件,无 -shm /
--wal 噪音。需要短暂 read 锁(~ms~s 级),不阻塞写。
-
-PostgreSQL 后续再加(用 `pg_dump --format=custom`),目前只 SQLite。
+SQLite uses ``VACUUM INTO``; WAL mode means copying the main database file is
+not transactionally safe. PostgreSQL uses the custom ``pg_dump`` format, which
+is compressed and restoreable with ``pg_restore`` while the API remains online.
 """
 from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import MetaData, Table, delete, text
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
-
 logger = logging.getLogger(__name__)
+
+
+def create_database_snapshot(db: Session, target_path: str | Path) -> Path:
+    """Create a consistent business-database snapshot at ``target_path``."""
+    engine = db.get_bind()
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        vacuum_into(db, target_path)
+        return Path(target_path)
+    if dialect == "postgresql":
+        return pg_dump(engine, target_path)
+    raise RuntimeError(f"database snapshots are not supported for {dialect}")
+
+
+def pg_dump(engine: Engine | Connection, target_path: str | Path) -> Path:
+    """Create a PostgreSQL custom-format dump using the engine connection URL."""
+    # Session.get_bind() is typed as Engine | Connection; pg_dump only needs its
+    # connection URL, so unwrap a bound Connection when one was supplied.
+    if isinstance(engine, Connection):
+        engine = engine.engine
+
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        target.unlink()
+
+    url = engine.url
+    command = [
+        "pg_dump",
+        "--format=custom",
+        "--no-owner",
+        "--no-privileges",
+        "--file",
+        str(target),
+        "--dbname",
+        url.database or "",
+    ]
+    if url.host:
+        command.extend(["--host", url.host])
+    if url.port:
+        command.extend(["--port", str(url.port)])
+    if url.username:
+        command.extend(["--username", url.username])
+
+    env = os.environ.copy()
+    if url.password:
+        env["PGPASSWORD"] = url.password
+
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("pg_dump is not installed in this environment") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("pg_dump timed out after 600 seconds") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown pg_dump error").strip()
+        raise RuntimeError(f"pg_dump failed: {detail[-1000:]}")
+    if not target.exists() or target.stat().st_size == 0:
+        raise RuntimeError("pg_dump did not produce a non-empty dump")
+    logger.info("pg_dump completed: %s (%d bytes)", target, target.stat().st_size)
+    return target
 
 
 # 备份默认排除的"运维类"表 — 不属于用户数据,留着只让 tar 变大 + 暴露
@@ -67,8 +131,9 @@ def vacuum_into(
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         target.unlink()
-    safe = str(target).replace("'", "''")
-    db.execute(text(f"VACUUM INTO '{safe}'"))
+    # VACUUM INTO is SQLite maintenance syntax and accepts a bound filename;
+    # there is no portable ORM equivalent for a consistent SQLite snapshot.
+    db.execute(text("VACUUM INTO :target"), {"target": str(target)})
     db.commit()
     if not target.exists():
         raise RuntimeError(f"VACUUM INTO did not produce file: {target}")
@@ -91,7 +156,8 @@ def vacuum_into(
                         # 表本来就不存在(老 DB 还没跑过这个 migration)— 跳过
                         continue
                     # 表名是常量白名单,无注入风险
-                    conn.execute(text(f"DELETE FROM {tbl}"))
+                    table = Table(tbl, MetaData(), autoload_with=conn)
+                    conn.execute(delete(table))
             # VACUUM 释放数据占用的空间(SQLite 不会自动收回)
             with copy_engine.connect() as conn:
                 conn.execute(text("VACUUM"))

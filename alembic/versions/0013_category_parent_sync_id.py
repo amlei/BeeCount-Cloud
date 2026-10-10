@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0013_user_category_parent_sync_id"
+revision = "0013_category_parent_sync_id"
 down_revision = "0012_shared_ledger"
 branch_labels = None
 depends_on = None

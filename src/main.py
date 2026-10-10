@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.routing import Route
 from fastapi.responses import FileResponse, PlainTextResponse
-from sqlalchemy import text
+from sqlalchemy import select
 
 from .config import get_settings
 from .database import SessionLocal
@@ -103,7 +103,7 @@ def healthz() -> dict:
 def ready() -> dict:
     db = SessionLocal()
     try:
-        db.execute(text("SELECT 1"))
+        db.execute(select(1))
         return {"status": "ready"}
     finally:
         db.close()
@@ -382,17 +382,24 @@ async def _stop_mcp_log_retention() -> None:  # noqa: B008
 
 @app.on_event("startup")
 async def _log_sync_changes_size() -> None:  # noqa: B008
-    from sqlalchemy import text
+    from sqlalchemy import Text, cast, func, select
+
+    from .models import SyncChange
 
     try:
         with SessionLocal() as db:
-            row = db.execute(text(
-                "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload_json)), 0) AS bytes "
-                "FROM sync_changes"
-            )).first()
+            row = db.execute(
+                select(
+                    func.count().label("n"),
+                    func.coalesce(
+                        func.sum(func.length(cast(SyncChange.payload_json, Text))),
+                        0,
+                    ).label("bytes"),
+                ).select_from(SyncChange)
+            ).first()
             if row is None:
                 return
-            n, payload_bytes = int(row[0] or 0), int(row[1] or 0)
+            n, payload_bytes = int(row.n or 0), int(row.bytes or 0)
             logging.getLogger(__name__).info(
                 "sync_changes: %d rows, payload=%.1f MB (append-only,长期膨胀 watch)",
                 n, payload_bytes / 1024.0 / 1024.0,

@@ -14,6 +14,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,7 +40,7 @@ class User(Base):
     # null = 未启用 / 未 setup。totp_enabled=False 但 secret 不为空 = setup 流程
     # 中途用户没 confirm,可以重新走 /setup 覆盖。
     totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=false())
     totp_enabled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -139,7 +141,7 @@ class PersonalAccessToken(Base):
     # 前 16 字符明文(如 `bcmcp_a1b2c3d4`)给列表展示用,识别哪个是哪个
     prefix: Mapped[str] = mapped_column(String(32), index=True)
     # JSON 数组:["mcp:read"] / ["mcp:write"] / 两者
-    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -192,10 +194,10 @@ class MCPCallLog(Base):
     # 出错时存 error.__class__.__name__ + truncated str(error),最多 500 字
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     args_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     called_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, index=True
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True
     )
 
 
@@ -263,7 +265,9 @@ class LedgerMember(Base):
     invited_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
 
     ledger: Mapped[Ledger] = relationship(back_populates="members")
 
@@ -289,7 +293,9 @@ class LedgerInvite(Base):
     used_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
 
 
 class SyncChange(Base):
@@ -497,7 +503,7 @@ class ReadTxProjection(Base):
     tx_index: Mapped[int] = mapped_column(Integer, default=0)
     created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_edited_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     # 账单标记(.docs/transaction-flags)。default false:既有行升级后不过滤,
     # 旧 App 不发该字段时保持 false。exclude_from_stats=不计入收支统计;
     # exclude_from_budget=不计入预算用量。两者独立。
@@ -567,7 +573,7 @@ class UserCategoryProjection(Base):
     # parent_name 字段保留(老调用 / fallback / 显示用),parent_sync_id 才是
     # 稳定 FK,父分类重命名时不需要级联改子分类。
     parent_sync_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 Index(
@@ -594,7 +600,7 @@ class UserAccountProjection(Base):
     payment_due_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bank_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_last_four: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     # 账户隐藏(issue #240)。default false:既有行升级后不隐藏,旧 App 不发该
     # 字段时保持 false。只影响前端选择器/列表呈现,服务端不做任何统计过滤(D1)。
     hidden: Mapped[bool] = mapped_column(
@@ -622,7 +628,7 @@ class UserExchangeRateProjection(Base):
     quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
     rate: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 Index(
@@ -658,7 +664,7 @@ class UserTagProjection(Base):
     sync_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
     color: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 class ReadBudgetProjection(Base):
@@ -676,8 +682,8 @@ class ReadBudgetProjection(Base):
     amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     period: Mapped[str | None] = mapped_column(String(32), nullable=True)
     start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    source_change_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 Index(
@@ -707,7 +713,7 @@ class BackupRemote(Base):
     )
     name: Mapped[str] = mapped_column(String(64))
     backend_type: Mapped[str] = mapped_column(String(32))  # 's3' / 'gdrive' / 'crypt' / ...
-    encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
+    encrypted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     config_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_test_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -730,10 +736,10 @@ class BackupSchedule(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(128))
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     cron_expr: Mapped[str] = mapped_column(String(64))  # 5-field crontab
-    retention_days: Mapped[int] = mapped_column(Integer, default=30)
-    include_attachments: Mapped[bool] = mapped_column(Boolean, default=True)
+    retention_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    include_attachments: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -755,7 +761,7 @@ class BackupScheduleRemote(Base):
     remote_id: Mapped[int] = mapped_column(
         ForeignKey("backup_remotes.id", ondelete="RESTRICT"), primary_key=True
     )
-    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class BackupRun(Base):
@@ -774,7 +780,7 @@ class BackupRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 'running' / 'succeeded' / 'partial' / 'failed' / 'canceled'
-    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running", server_default="running", index=True)
     backup_filename: Mapped[str | None] = mapped_column(String(128), nullable=True)
     bytes_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -795,7 +801,7 @@ class BackupRunTarget(Base):
         ForeignKey("backup_remotes.id"), index=True
     )
     # 'pending' / 'running' / 'succeeded' / 'failed'
-    status: Mapped[str] = mapped_column(String(16), default="pending")
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bytes_transferred: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

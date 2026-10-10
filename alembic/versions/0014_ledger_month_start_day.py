@@ -14,7 +14,7 @@ from alembic import op
 
 
 revision = "0014_ledger_month_start_day"
-down_revision = "0013_user_category_parent_sync_id"
+down_revision = "0013_category_parent_sync_id"
 branch_labels = None
 depends_on = None
 

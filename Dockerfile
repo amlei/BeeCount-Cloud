@@ -52,6 +52,7 @@ WORKDIR /app
 # 系统依赖:
 #  - tzdata: 时区数据
 #  - curl: HEALTHCHECK 用(比 Python urllib 省事)
+#  - postgresql-client: PG 部署的 pg_dump 快照。
 #  - rclone: 备份模块用,subprocess 调用推数据到对象存储。
 #    Debian 12 仓库版本 1.60.x,S3/R2/WebDAV/B2/GDrive/OneDrive 全支持。
 # 注:age 加密走 pyrage Python binding(见 requirements.txt),不需要装
@@ -59,6 +60,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     curl \
+    postgresql-client \
     rclone \
     && rm -rf /var/lib/apt/lists/*
 

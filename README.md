@@ -232,6 +232,24 @@ So after pulling a new image, any new migrations execute in order before request
 
 If a migration fails (rare), the container exits with the database left at the pre-upgrade version — fix the issue and `docker compose pull && up -d` to retry.
 
+### PostgreSQL
+
+SQLite is the default. PostgreSQL 16 is also supported. For local development, start the database with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d db
+```
+
+Then point the backend at the same Alembic-managed schema:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://beecount:beecount@localhost:5432/beecount
+make migrate
+make dev-api
+```
+
+Server-side backups automatically use `pg_dump --format=custom` for PostgreSQL and `VACUUM INTO` for SQLite. Restore a PG dump with `pg_restore`.
+
 ---
 
 ## 📱 Mobile App Setup
